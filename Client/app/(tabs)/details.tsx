@@ -1,12 +1,12 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking, ActivityIndicator, TextInput, Alert } from 'react-native';
 import MapView, { Polyline, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useMemo, useState, useRef, useEffect } from 'react';
-import { BASE_URL } from '../../services/api';
+import { BASE_URL, authService } from '../../services/api';
 
-// 1. Updated Interface for structured Note data including counts
 interface Note {
+  _id?: string;
   latitude: number;
   longitude: number;
   className: string;
@@ -15,17 +15,14 @@ interface Note {
   address?: string;
   contactPersonName?: string;
   contactPersonNumber?: string;
-  studentCount?: number; // Added
-  classCount?: number;   // Added
+  studentCount?: number;
+  classCount?: number;
   createdAt?: string;
   timestamp?: string;
 }
 
-////////////////////////////////////////////////////////////
-// UTILS: Haversine Formula for Real-World Distance
-////////////////////////////////////////////////////////////
 const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-  const R = 6371; // Earth radius in km
+  const R = 6371;
   const dLat = (lat2 - lat1) * (Math.PI / 180);
   const dLon = (lon2 - lon1) * (Math.PI / 180);
   const a =
@@ -43,31 +40,113 @@ export default function DayDetails() {
 
   const [isTaskListVisible, setTaskListVisible] = useState(false);
   const [selectedNote, setSelectedNote] = useState<Note | null>(null);
+
+  // ✅ Edit modal state
+  const [isEditModalVisible, setEditModalVisible] = useState(false);
+  const [editForm, setEditForm] = useState<Partial<Note>>({});
+  const [isSaving, setIsSaving] = useState(false);
+
   const [shiftData, setShiftData] = useState<{ date: string; path: any[]; notes: Note[] }>({
-    date: '',
-    path: [],
-    notes: []
+    date: '', path: [], notes: []
   });
 
-  // Fetch shift path and visit notes from backend
-  useEffect(() => {
-    if (shiftId) {
+  // ✅ Fetch with _id included
+  const fetchDetails = async () => {
+    try {
       const url = `${BASE_URL}/shift-details/${shiftId}`;
-      fetch(url)
-        .then(async (res) => {
-          if (!res.ok) throw new Error(`Status: ${res.status}`);
-          return res.json();
-        })
-        .then((data) => {
-          setShiftData({
-            date: data.date || '',
-            path: data.path || [],
-            notes: data.notes || []
-          });
-        })
-        .catch((err) => console.error("❌ Fetch Error:", err));
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Status: ${res.status}`);
+      const data = await res.json();
+      setShiftData({
+        date: data.date || '',
+        path: data.path || [],
+        notes: data.notes || []
+      });
+    } catch (err) {
+      console.error("❌ Fetch Error:", err);
     }
+  };
+
+  useEffect(() => {
+    if (shiftId) fetchDetails();
   }, [shiftId]);
+
+  // ✅ Open edit modal pre-filled
+  const openEditModal = () => {
+    if (!selectedNote) return;
+    setEditForm({
+      className: selectedNote.className,
+      directorName: selectedNote.directorName,
+      directorNumber: selectedNote.directorNumber,
+      address: selectedNote.address,
+      contactPersonName: selectedNote.contactPersonName,
+      contactPersonNumber: selectedNote.contactPersonNumber,
+      studentCount: selectedNote.studentCount,
+      classCount: selectedNote.classCount,
+    });
+    setEditModalVisible(true);
+  };
+
+  // ✅ Save edited note
+  const handleSaveEdit = async () => {
+    if (!selectedNote?._id) return;
+
+    if (!editForm.className || editForm.className.trim() === '') {
+      Alert.alert("Validation Error", "Class name cannot be empty.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await authService.updateNote(selectedNote._id, {
+        className: editForm.className!.trim(),
+        directorName: editForm.directorName,
+        directorNumber: editForm.directorNumber,
+        address: editForm.address,
+        contactPersonName: editForm.contactPersonName,
+        contactPersonNumber: editForm.contactPersonNumber,
+        studentCount: Number(editForm.studentCount) || 0,
+        classCount: Number(editForm.classCount) || 0,
+      });
+
+      Alert.alert("✅ Success", "Note updated successfully!");
+      setEditModalVisible(false);
+      setTaskListVisible(false);
+      await fetchDetails();
+    } catch (err: any) {
+      Alert.alert("Error", err?.response?.data?.message || "Failed to update note.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // ✅ Delete note with confirmation
+  const handleDeleteNote = () => {
+    if (!selectedNote?._id) return;
+
+    Alert.alert(
+      "🗑️ Delete Note",
+      `Are you sure you want to delete the note for "${selectedNote.className}"? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await authService.deleteNote(selectedNote._id!);
+              Alert.alert("✅ Deleted", "Note has been deleted.");
+              setTaskListVisible(false);
+              setSelectedNote(null);
+              await fetchDetails();
+            } catch (err: any) {
+              Alert.alert("Error", err?.response?.data?.message || "Failed to delete note.");
+            }
+          }
+        }
+      ]
+    );
+  };
 
   const formattedRoute = useMemo(() => {
     return shiftData.path
@@ -91,7 +170,6 @@ export default function DayDetails() {
     return distance;
   }, [formattedRoute]);
 
-  // Aggregate Total Student and Class counts for the day
   const dailyStats = useMemo(() => {
     return shiftData.notes.reduce((acc, note) => ({
       totalStudents: acc.totalStudents + (Number(note.studentCount) || 0),
@@ -138,12 +216,7 @@ export default function DayDetails() {
         <Text style={styles.headerTitle}>{shiftData.date} Activity</Text>
       </TouchableOpacity>
 
-      <MapView
-        ref={mapRef}
-        provider={PROVIDER_GOOGLE}
-        style={styles.map}
-        initialRegion={initialRegion}
-      >
+      <MapView ref={mapRef} provider={PROVIDER_GOOGLE} style={styles.map} initialRegion={initialRegion}>
         {formattedRoute.length > 1 && (
           <>
             <Polyline coordinates={formattedRoute} strokeColor="#007AFF" strokeWidth={5} />
@@ -154,7 +227,7 @@ export default function DayDetails() {
 
         {formattedNotes.map((note, index) => (
           <Marker
-            key={`note-${index}`}
+            key={note._id || `note-${index}`}
             coordinate={{ latitude: note.latitude, longitude: note.longitude }}
             onPress={() => handleNotePress(note)}
           >
@@ -165,28 +238,39 @@ export default function DayDetails() {
         ))}
       </MapView>
 
-      <Modal animationType="slide" transparent visible={isTaskListVisible}>
+      {/* ===== VIEW NOTE MODAL ===== */}
+      <Modal animationType="slide" transparent visible={isTaskListVisible} onRequestClose={() => setTaskListVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTypeLabel}>VISIT INFORMATION</Text>
-              <TouchableOpacity onPress={() => setTaskListVisible(false)}>
-                <Ionicons name="close-circle" size={32} color="#ccc" />
-              </TouchableOpacity>
+              {/* ✅ Edit & Delete buttons */}
+              <View style={styles.modalHeaderActions}>
+                <TouchableOpacity style={styles.editBtn} onPress={openEditModal}>
+                  <Ionicons name="pencil" size={15} color="#007AFF" />
+                  <Text style={styles.editBtnText}>Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteNote}>
+                  <Ionicons name="trash" size={15} color="#FF3B30" />
+                  <Text style={styles.deleteBtnText}>Delete</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setTaskListVisible(false)}>
+                  <Ionicons name="close-circle" size={32} color="#ccc" />
+                </TouchableOpacity>
+              </View>
             </View>
 
             {selectedNote && (
               <ScrollView showsVerticalScrollIndicator={false}>
                 <Text style={styles.classNameText}>{selectedNote.className}</Text>
-                
-                {/* Visual Count Badges inside Modal */}
+
                 <View style={styles.badgeRow}>
-                    <View style={[styles.countBadge, { backgroundColor: '#E0F2FE' }]}>
-                        <Text style={[styles.badgeText, { color: '#0369A1' }]}>Students: {selectedNote.studentCount || 0}</Text>
-                    </View>
-                    <View style={[styles.countBadge, { backgroundColor: '#F0FDF4' }]}>
-                        <Text style={[styles.badgeText, { color: '#15803D' }]}>Classes: {selectedNote.classCount || 0}</Text>
-                    </View>
+                  <View style={[styles.countBadge, { backgroundColor: '#E0F2FE' }]}>
+                    <Text style={[styles.badgeText, { color: '#0369A1' }]}>Students: {selectedNote.studentCount || 0}</Text>
+                  </View>
+                  <View style={[styles.countBadge, { backgroundColor: '#F0FDF4' }]}>
+                    <Text style={[styles.badgeText, { color: '#15803D' }]}>Classes: {selectedNote.classCount || 0}</Text>
+                  </View>
                 </View>
 
                 <Text style={styles.taskTime}>
@@ -240,6 +324,43 @@ export default function DayDetails() {
         </View>
       </Modal>
 
+      {/* ===== EDIT NOTE MODAL ===== */}
+      <Modal animationType="slide" transparent visible={isEditModalVisible} onRequestClose={() => setEditModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '90%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTypeLabel}>✏️ EDIT NOTE</Text>
+              <TouchableOpacity onPress={() => setEditModalVisible(false)}>
+                <Ionicons name="close-circle" size={32} color="#ccc" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <EditField label="Class Name *" value={editForm.className} onChangeText={(v) => setEditForm(p => ({ ...p, className: v }))} />
+              <EditField label="Director Name" value={editForm.directorName} onChangeText={(v) => setEditForm(p => ({ ...p, directorName: v }))} />
+              <EditField label="Director Number" value={editForm.directorNumber} onChangeText={(v) => setEditForm(p => ({ ...p, directorNumber: v }))} keyboardType="phone-pad" />
+              <EditField label="Address" value={editForm.address} onChangeText={(v) => setEditForm(p => ({ ...p, address: v }))} multiline />
+              <EditField label="Contact Person Name" value={editForm.contactPersonName} onChangeText={(v) => setEditForm(p => ({ ...p, contactPersonName: v }))} />
+              <EditField label="Contact Person Number" value={editForm.contactPersonNumber} onChangeText={(v) => setEditForm(p => ({ ...p, contactPersonNumber: v }))} keyboardType="phone-pad" />
+              <EditField label="Student Count" value={String(editForm.studentCount ?? '')} onChangeText={(v) => setEditForm(p => ({ ...p, studentCount: Number(v) }))} keyboardType="numeric" />
+              <EditField label="Class Count" value={String(editForm.classCount ?? '')} onChangeText={(v) => setEditForm(p => ({ ...p, classCount: Number(v) }))} keyboardType="numeric" />
+
+              <TouchableOpacity
+                style={[styles.saveBtn, isSaving && { opacity: 0.6 }]}
+                onPress={handleSaveEdit}
+                disabled={isSaving}
+              >
+                {isSaving
+                  ? <ActivityIndicator color="white" />
+                  : <Text style={styles.saveBtnText}>💾 Save Changes</Text>
+                }
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ===== SUMMARY BOX ===== */}
       <View style={styles.summaryBox}>
         <Text style={styles.summaryTitle}>Day Summary</Text>
         <View style={styles.statRow}>
@@ -265,6 +386,39 @@ export default function DayDetails() {
   );
 }
 
+// ✅ Reusable Edit Field Component
+function EditField({ label, value, onChangeText, keyboardType, multiline }: {
+  label: string;
+  value?: string;
+  onChangeText: (v: string) => void;
+  keyboardType?: any;
+  multiline?: boolean;
+}) {
+  return (
+    <View style={{ marginBottom: 14 }}>
+      <Text style={editStyles.label}>{label}</Text>
+      <TextInput
+        style={[editStyles.input, multiline && { height: 80, textAlignVertical: 'top' }]}
+        value={value || ''}
+        onChangeText={onChangeText}
+        keyboardType={keyboardType || 'default'}
+        multiline={multiline}
+        placeholder={`Enter ${label.replace(' *', '')}`}
+        placeholderTextColor="#C7C7CC"
+      />
+    </View>
+  );
+}
+
+const editStyles = StyleSheet.create({
+  label: { fontSize: 12, color: '#8E8E93', textTransform: 'uppercase', marginBottom: 6, fontWeight: '600' },
+  input: {
+    borderWidth: 1, borderColor: '#E5E5EA', borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: '#1C1C1E',
+    backgroundColor: '#F9F9F9'
+  },
+});
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1 },
@@ -281,7 +435,15 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: 'white', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '75%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  modalHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   modalTypeLabel: { fontSize: 11, color: '#888', fontWeight: 'bold', letterSpacing: 1 },
+  // ✅ Edit & Delete buttons
+  editBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EFF6FF', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  editBtnText: { color: '#007AFF', fontWeight: '700', fontSize: 12 },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FFF1F0', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 },
+  deleteBtnText: { color: '#FF3B30', fontWeight: '700', fontSize: 12 },
+  saveBtn: { backgroundColor: '#007AFF', borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 10, marginBottom: 30 },
+  saveBtnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   classNameText: { fontSize: 24, fontWeight: 'bold', color: '#1a1a1a' },
   badgeRow: { flexDirection: 'row', marginTop: 10, gap: 10 },
   countBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
@@ -294,13 +456,13 @@ const styles = StyleSheet.create({
   infoLabel: { fontSize: 10, color: '#999', textTransform: 'uppercase', marginBottom: 2 },
   infoMainText: { fontSize: 16, color: '#333', fontWeight: '600' },
   phoneLink: { fontSize: 15, color: '#007AFF', fontWeight: 'bold', marginTop: 3 },
-  summaryBox: { 
-    padding: 20, backgroundColor: 'white', borderTopLeftRadius: 30, borderTopRightRadius: 30, 
-    elevation: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.1, shadowRadius: 10 
+  summaryBox: {
+    padding: 20, backgroundColor: 'white', borderTopLeftRadius: 30, borderTopRightRadius: 30,
+    elevation: 20, shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.1, shadowRadius: 10
   },
   summaryTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 15, color: '#444' },
   statRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  statBox: { flex: 1, alignItems: 'center' }, 
+  statBox: { flex: 1, alignItems: 'center' },
   statLabel: { fontSize: 10, color: '#888', marginBottom: 4, textTransform: 'uppercase' },
   statValue: { fontSize: 15, fontWeight: 'bold', color: '#111' }
 });

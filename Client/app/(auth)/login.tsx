@@ -103,7 +103,7 @@ export default function Login() {
 
       <Link href="/signup" asChild>
         <TouchableOpacity style={styles.link}>
-          <Text style={styles.linkText}>New Worker? Register Account</Text>
+          <Text style={styles.linkText}>New Employee? Register Account</Text>
         </TouchableOpacity>
       </Link>
     </KeyboardAvoidingView>

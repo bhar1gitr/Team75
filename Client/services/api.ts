@@ -1,9 +1,9 @@
 import axios from 'axios';
 
 // Replace with your current local IP
-export const BASE_URL = 'http://192.168.1.6:5000/api';
+export const BASE_URL = 'http://192.168.1.5:5000/api';
 // export const BASE_URL = 'https://tracker-app-r6gy.onrender.com/api';
-// export const BASE_URL = 'https://tracker-backend-5oqo.onrender.com/api';
+// export const BASE_URL = 'https://team75.onrender.com/api';
 
 const apiClient = axios.create({
   baseURL: BASE_URL,
@@ -21,7 +21,7 @@ export const authService = {
     const response = await apiClient.post('/auth/login', data);
     return response.data;
   },
-
+ 
   startShift: async (userId: string) => {
     // Clean ID here just in case AsyncStorage added quotes
     const cleanId = userId.replace(/['"]+/g, '');
@@ -62,4 +62,22 @@ export const authService = {
   //   const response = await apiClient.get(`/history/${cleanId}`);
   //   return response.data;
   // },
-};
+
+updateNote: async (noteId: string, data: {
+    className: string;
+    directorName?: string;
+    directorNumber?: string;
+    address?: string;
+    contactPersonName?: string;
+    contactPersonNumber?: string;
+    studentCount?: number;
+    classCount?: number;
+  }) => {
+    const response = await apiClient.put(`/notes/${noteId}`, data);
+    return response.data;
+  },
+
+  deleteNote: async (noteId: string) => {
+    const response = await apiClient.delete(`/notes/${noteId}`);
+    return response.data;
+  },};

@@ -1,11 +1,13 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, Linking, ActivityIndicator } from 'react-native';
-import MapView, { Polyline, Marker, PROVIDER_GOOGLE, Region } from 'react-native-maps';
+import {
+  View, Text, StyleSheet, TouchableOpacity, Modal,
+  ScrollView, Linking, ActivityIndicator, TextInput, Alert
+} from 'react-native';
+import MapView, { Polyline, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useMemo, useState, useRef, useEffect } from 'react';
-import { BASE_URL } from '../../services/api';
+import { BASE_URL, authService } from '../../services/api';
 
-// 1. Updated Interface to match NoteSchema exactly
 interface Note {
   _id?: string;
   latitude: number;
@@ -14,8 +16,8 @@ interface Note {
   directorName?: string;
   directorNumber?: string;
   address?: string;
-  contactPersonName?: string;    // Added
-  contactPersonNumber?: string;  // Added
+  contactPersonName?: string;
+  contactPersonNumber?: string;
   studentCount?: number;
   classCount?: number;
   createdAt?: string;
@@ -32,14 +34,18 @@ export default function DayDetails() {
   const [loading, setLoading] = useState(true);
   const [autoZoom, setAutoZoom] = useState(true);
 
+  // ✅ Edit modal state
+  const [isEditModalVisible, setEditModalVisible] = useState(false);
+  const [editForm, setEditForm] = useState<Partial<Note>>({});
+  const [isSaving, setIsSaving] = useState(false);
+
   const [shiftData, setShiftData] = useState<{ date: string; path: any[]; notes: Note[] }>({
     date: '', path: [], notes: []
   });
 
   const fetchDetails = async () => {
     try {
-      const url = `${BASE_URL}/shift-details/${shiftId}`;
-      const res = await fetch(url);
+      const res = await fetch(`${BASE_URL}/shift-details/${shiftId}`);
       const data = await res.json();
       if (data) {
         setShiftData({
@@ -59,6 +65,88 @@ export default function DayDetails() {
     const interval = setInterval(fetchDetails, 5000);
     return () => clearInterval(interval);
   }, [shiftId]);
+
+  // ✅ Open edit modal pre-filled with selected note data
+  const openEditModal = () => {
+    if (!selectedNote) return;
+    setEditForm({
+      className: selectedNote.className,
+      directorName: selectedNote.directorName,
+      directorNumber: selectedNote.directorNumber,
+      address: selectedNote.address,
+      contactPersonName: selectedNote.contactPersonName,
+      contactPersonNumber: selectedNote.contactPersonNumber,
+      studentCount: selectedNote.studentCount,
+      classCount: selectedNote.classCount,
+    });
+    setEditModalVisible(true);
+  };
+
+  // ✅ Save edited note
+  const handleSaveEdit = async () => {
+    if (!selectedNote?._id) return;
+
+    if (!editForm.className || editForm.className.trim() === '') {
+      Alert.alert("Validation Error", "Class name cannot be empty.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await authService.updateNote(selectedNote._id, {
+        className: editForm.className!.trim(),
+        directorName: editForm.directorName,
+        directorNumber: editForm.directorNumber,
+        address: editForm.address,
+        contactPersonName: editForm.contactPersonName,
+        contactPersonNumber: editForm.contactPersonNumber,
+        studentCount: Number(editForm.studentCount) || 0,
+        classCount: Number(editForm.classCount) || 0,
+      });
+
+      Alert.alert("✅ Success", "Note updated successfully!");
+      setEditModalVisible(false);
+      setTaskListVisible(false);
+      await fetchDetails(); // Refresh data
+    } catch (err: any) {
+      Alert.alert("Error", err?.response?.data?.message || "Failed to update note.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // ✅ Delete note with confirmation
+  const handleDeleteNote = () => {
+    if (!selectedNote?._id) return;
+
+    Alert.alert(
+      "🗑️ Delete Note",
+      `Are you sure you want to delete the note for "${selectedNote.className}"? This cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            console.log("🚀 Calling deleteNote with ID:", selectedNote._id);
+  console.log("🚀 Full URL will be:", `/notes/${selectedNote._id}`)
+            try {
+              await authService.deleteNote(selectedNote._id!);
+              Alert.alert("✅ Deleted", "Note has been deleted.");
+              setTaskListVisible(false);
+              setSelectedNote(null);
+              await fetchDetails(); // Refresh data
+            } catch (err: any) {
+  // Show FULL error details
+  Alert.alert("Error", 
+    `Status: ${err?.response?.status}\nMessage: ${err?.response?.data?.message}\nError: ${err?.message}\nURL: ${err?.config?.url}`
+  );
+}
+          }
+        }
+      ]
+    );
+  };
 
   const formattedRoute = useMemo(() => {
     return (shiftData.path || [])
@@ -103,7 +191,6 @@ export default function DayDetails() {
   }, [shiftData.notes]);
 
   const latestPos = formattedRoute.length > 0 ? formattedRoute[formattedRoute.length - 1] : null;
-
   const callNumber = (num?: string) => { if (num) Linking.openURL(`tel:${num}`); };
 
   if (loading && !shiftData.date) {
@@ -114,86 +201,100 @@ export default function DayDetails() {
     <View style={styles.container}>
       <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
         <Ionicons name="arrow-back" size={24} color="black" />
-        <View style={{marginLeft: 10}}>
-            <Text style={styles.headerTitle}>{shiftData.date} Activity</Text>
-            <View style={styles.liveBadge}>
-                <View style={styles.liveDot} />
-                <Text style={styles.liveText}>LIVE UPDATING</Text>
-            </View>
+        <View style={{ marginLeft: 10 }}>
+          <Text style={styles.headerTitle}>{shiftData.date} Activity</Text>
+          <View style={styles.liveBadge}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE UPDATING</Text>
+          </View>
         </View>
       </TouchableOpacity>
 
-      <TouchableOpacity 
-        style={[styles.zoomToggle, { backgroundColor: autoZoom ? '#007AFF' : 'white' }]} 
+      <TouchableOpacity
+        style={[styles.zoomToggle, { backgroundColor: autoZoom ? '#007AFF' : 'white' }]}
         onPress={() => setAutoZoom(!autoZoom)}
       >
         <Ionicons name="locate" size={24} color={autoZoom ? "white" : "black"} />
       </TouchableOpacity>
 
-      <MapView 
-        ref={mapRef} 
-        provider={PROVIDER_GOOGLE} 
+      <MapView
+        ref={mapRef}
+        provider={PROVIDER_GOOGLE}
         style={styles.map}
         onPanDrag={() => setAutoZoom(false)}
         initialRegion={{
-            latitude: latestPos?.latitude || 19.1970,
-            longitude: latestPos?.longitude || 72.9768,
-            latitudeDelta: 0.015,
-            longitudeDelta: 0.015
+          latitude: latestPos?.latitude || 19.1970,
+          longitude: latestPos?.longitude || 72.9768,
+          latitudeDelta: 0.015,
+          longitudeDelta: 0.015
         }}
       >
         {formattedRoute.length > 1 && (
           <>
-            <Polyline 
-                key={`line-${formattedRoute.length}`}
-                coordinates={formattedRoute} 
-                strokeColor="#007AFF" 
-                strokeWidth={6} 
-                lineJoin="round"
+            <Polyline
+              key={`line-${formattedRoute.length}`}
+              coordinates={formattedRoute}
+              strokeColor="#007AFF"
+              strokeWidth={6}
+              lineJoin="round"
             />
             <Marker coordinate={formattedRoute[0]} title="Start Location">
-                <Ionicons name="play-circle" size={30} color="#34C759" />
+              <Ionicons name="play-circle" size={30} color="#34C759" />
             </Marker>
             {latestPos && (
-                <Marker coordinate={latestPos} anchor={{x: 0.5, y: 0.5}}>
-                    <View style={styles.pulseContainer}><View style={styles.innerDot} /></View>
-                </Marker>
+              <Marker coordinate={latestPos} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={styles.pulseContainer}><View style={styles.innerDot} /></View>
+              </Marker>
             )}
           </>
         )}
 
         {(shiftData.notes || []).map((note, index) => (
-          <Marker 
-            key={note._id || `note-${index}`} 
-            coordinate={{ 
-                latitude: parseFloat(note.latitude as any), 
-                longitude: parseFloat(note.longitude as any) 
-            }} 
-            onPress={() => { 
-                setSelectedNote(note); 
-                setTaskListVisible(true); 
+          <Marker
+            key={note._id || `note-${index}`}
+            coordinate={{
+              latitude: parseFloat(note.latitude as any),
+              longitude: parseFloat(note.longitude as any)
+            }}
+            onPress={() => {
+              setSelectedNote(note);
+              setTaskListVisible(true);
             }}
           >
-            <View style={styles.noteIconBubble}><Ionicons name="business" size={16} color="white" /></View>
+            <View style={styles.noteIconBubble}>
+              <Ionicons name="business" size={16} color="white" />
+            </View>
           </Marker>
         ))}
       </MapView>
 
-      {/* MODAL FOR SAVED NOTES - Updated with new fields */}
-      <Modal animationType="slide" transparent={true} visible={isTaskListVisible} onRequestClose={() => setTaskListVisible(false)}>
+      {/* ===== VIEW NOTE MODAL ===== */}
+      <Modal animationType="slide" transparent visible={isTaskListVisible} onRequestClose={() => setTaskListVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTypeLabel}>VISIT DETAILS</Text>
-              <TouchableOpacity onPress={() => setTaskListVisible(false)}>
-                <Ionicons name="close-circle" size={32} color="#ccc" />
-              </TouchableOpacity>
+              <View style={styles.modalHeaderActions}>
+                {/* ✅ EDIT BUTTON */}
+                <TouchableOpacity style={styles.editBtn} onPress={openEditModal}>
+                  <Ionicons name="pencil" size={16} color="#007AFF" />
+                  <Text style={styles.editBtnText}>Edit</Text>
+                </TouchableOpacity>
+                {/* ✅ DELETE BUTTON */}
+                <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteNote}>
+                  <Ionicons name="trash" size={16} color="#FF3B30" />
+                  <Text style={styles.deleteBtnText}>Delete</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setTaskListVisible(false)}>
+                  <Ionicons name="close-circle" size={32} color="#ccc" />
+                </TouchableOpacity>
+              </View>
             </View>
 
             {selectedNote && (
               <ScrollView showsVerticalScrollIndicator={false}>
                 <Text style={styles.classNameText}>{selectedNote.className}</Text>
-                
+
                 <View style={styles.countsRow}>
                   <View style={styles.countBadge}>
                     <Ionicons name="people" size={16} color="#007AFF" />
@@ -207,7 +308,6 @@ export default function DayDetails() {
 
                 <View style={styles.divider} />
 
-                {/* Director Section */}
                 <View style={styles.infoSection}>
                   <View style={styles.iconCircle}><Ionicons name="person" size={18} color="#007AFF" /></View>
                   <View style={styles.infoTextContainer}>
@@ -221,7 +321,6 @@ export default function DayDetails() {
                   </View>
                 </View>
 
-                {/* Contact Person Section - NEW */}
                 <View style={styles.infoSection}>
                   <View style={styles.iconCircle}><Ionicons name="call" size={18} color="#4ADE80" /></View>
                   <View style={styles.infoTextContainer}>
@@ -235,7 +334,6 @@ export default function DayDetails() {
                   </View>
                 </View>
 
-                {/* Address Section */}
                 <View style={styles.infoSection}>
                   <View style={styles.iconCircle}><Ionicons name="location" size={18} color="#EAB308" /></View>
                   <View style={styles.infoTextContainer}>
@@ -244,7 +342,6 @@ export default function DayDetails() {
                   </View>
                 </View>
 
-                {/* Timestamp Section */}
                 <View style={styles.infoSection}>
                   <View style={styles.iconCircle}><Ionicons name="time" size={18} color="#94A3B8" /></View>
                   <View style={styles.infoTextContainer}>
@@ -260,6 +357,42 @@ export default function DayDetails() {
         </View>
       </Modal>
 
+      {/* ===== EDIT NOTE MODAL ===== */}
+      <Modal animationType="slide" transparent visible={isEditModalVisible} onRequestClose={() => setEditModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxHeight: '90%' }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTypeLabel}>✏️ EDIT NOTE</Text>
+              <TouchableOpacity onPress={() => setEditModalVisible(false)}>
+                <Ionicons name="close-circle" size={32} color="#ccc" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <EditField label="Class Name *" value={editForm.className} onChangeText={(v) => setEditForm(p => ({ ...p, className: v }))} />
+              <EditField label="Director Name" value={editForm.directorName} onChangeText={(v) => setEditForm(p => ({ ...p, directorName: v }))} />
+              <EditField label="Director Number" value={editForm.directorNumber} onChangeText={(v) => setEditForm(p => ({ ...p, directorNumber: v }))} keyboardType="phone-pad" />
+              <EditField label="Address" value={editForm.address} onChangeText={(v) => setEditForm(p => ({ ...p, address: v }))} multiline />
+              <EditField label="Contact Person Name" value={editForm.contactPersonName} onChangeText={(v) => setEditForm(p => ({ ...p, contactPersonName: v }))} />
+              <EditField label="Contact Person Number" value={editForm.contactPersonNumber} onChangeText={(v) => setEditForm(p => ({ ...p, contactPersonNumber: v }))} keyboardType="phone-pad" />
+              <EditField label="Student Count" value={String(editForm.studentCount ?? '')} onChangeText={(v) => setEditForm(p => ({ ...p, studentCount: Number(v) }))} keyboardType="numeric" />
+              <EditField label="Class Count" value={String(editForm.classCount ?? '')} onChangeText={(v) => setEditForm(p => ({ ...p, classCount: Number(v) }))} keyboardType="numeric" />
+
+              <TouchableOpacity
+                style={[styles.saveBtn, isSaving && { opacity: 0.6 }]}
+                onPress={handleSaveEdit}
+                disabled={isSaving}
+              >
+                {isSaving
+                  ? <ActivityIndicator color="white" />
+                  : <Text style={styles.saveBtnText}>💾 Save Changes</Text>
+                }
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
       <View style={styles.summaryBox}>
         <View style={styles.statRow}>
           <View style={styles.statBox}><Text style={styles.statLabel}>Distance</Text><Text style={styles.statValue}>{totalKm.toFixed(2)} km</Text></View>
@@ -270,6 +403,39 @@ export default function DayDetails() {
     </View>
   );
 }
+
+// ✅ Reusable Edit Field Component
+function EditField({ label, value, onChangeText, keyboardType, multiline }: {
+  label: string;
+  value?: string;
+  onChangeText: (v: string) => void;
+  keyboardType?: any;
+  multiline?: boolean;
+}) {
+  return (
+    <View style={{ marginBottom: 14 }}>
+      <Text style={editStyles.label}>{label}</Text>
+      <TextInput
+        style={[editStyles.input, multiline && { height: 80, textAlignVertical: 'top' }]}
+        value={value || ''}
+        onChangeText={onChangeText}
+        keyboardType={keyboardType || 'default'}
+        multiline={multiline}
+        placeholder={`Enter ${label.replace(' *', '')}`}
+        placeholderTextColor="#C7C7CC"
+      />
+    </View>
+  );
+}
+
+const editStyles = StyleSheet.create({
+  label: { fontSize: 12, color: '#8E8E93', textTransform: 'uppercase', marginBottom: 6, fontWeight: '600' },
+  input: {
+    borderWidth: 1, borderColor: '#E5E5EA', borderRadius: 10,
+    paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: '#1C1C1E',
+    backgroundColor: '#F9F9F9'
+  },
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
@@ -294,7 +460,15 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: 'white', borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 25, maxHeight: '75%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 },
+  modalHeaderActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   modalTypeLabel: { fontSize: 12, color: '#888', fontWeight: 'bold', letterSpacing: 1 },
+  // ✅ Edit & Delete button styles
+  editBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EFF6FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
+  editBtnText: { color: '#007AFF', fontWeight: '700', fontSize: 13 },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#FFF1F0', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10 },
+  deleteBtnText: { color: '#FF3B30', fontWeight: '700', fontSize: 13 },
+  saveBtn: { backgroundColor: '#007AFF', borderRadius: 14, paddingVertical: 15, alignItems: 'center', marginTop: 10, marginBottom: 30 },
+  saveBtnText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
   classNameText: { fontSize: 24, fontWeight: 'bold', color: '#1C1C1E' },
   countsRow: { flexDirection: 'row', marginTop: 12, gap: 10 },
   countBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFF6FF', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, gap: 6 },

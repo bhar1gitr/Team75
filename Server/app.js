@@ -363,7 +363,10 @@ app.get('/api/shift-details/:shiftId', async (req, res) => {
         res.status(200).json({
             date: shift.date,
             path: shift.path || [],
-            notes: shift.notes || []
+            notes: (shift.notes || []).map(n => ({
+    ...n,
+    _id: n._id.toString()
+}))
         });
     } catch (err) {
         console.error("🔥 Server Error:", err);
@@ -686,5 +689,75 @@ app.get('/api/download-shift-report/:shiftId', async (req, res) => {
     }
 });
 
+// ✅ UPDATE a note (Admin Edit)
+app.put('/api/notes/:noteId', async (req, res) => {
+    try {
+        const { noteId } = req.params;
+        const {
+            className,
+            directorName,
+            directorNumber,
+            address,
+            contactPersonName,
+            contactPersonNumber,
+            studentCount,
+            classCount
+        } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(noteId)) {
+            return res.status(400).json({ message: "Invalid note ID" });
+        }
+
+        // Prevent saving empty className
+        if (!className || className.trim() === '') {
+            return res.status(400).json({ message: "Class name cannot be empty" });
+        }
+
+        const updatedNote = await Note.findByIdAndUpdate(
+            noteId,
+            {
+                className,
+                directorName,
+                directorNumber,
+                address,
+                contactPersonName,
+                contactPersonNumber,
+                studentCount,
+                classCount
+            },
+            { new: true }
+        );
+
+        if (!updatedNote) return res.status(404).json({ message: "Note not found" });
+
+        res.status(200).json({ message: "Note updated successfully", note: updatedNote });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// ✅ DELETE a note (Admin Delete)
+app.delete('/api/notes/:noteId', async (req, res) => {
+    try {
+        const { noteId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(noteId)) {
+            return res.status(400).json({ message: "Invalid note ID" });
+        }
+
+        const deletedNote = await Note.findByIdAndDelete(noteId);
+        if (!deletedNote) return res.status(404).json({ message: "Note not found" });
+
+        // Also remove the reference from any shift that has this note
+        await Shift.updateMany(
+            { notes: noteId },
+            { $pull: { notes: new mongoose.Types.ObjectId(noteId) } }
+        );
+
+        res.status(200).json({ message: "Note deleted successfully" });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
 const PORT = 5000;
 app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server on port ${PORT}`));

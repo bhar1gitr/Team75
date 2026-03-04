@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "Team 75",
+    "name": "Team 65",
     "slug": "mymapapp",
     "version": "1.0.0",
     "icon": "./assets/images/icon.png",
     "extra": {
       "eas": {
-        "projectId": "0050ec39-4048-4140-a68c-cbd16ef5b85b"
+        "projectId": "ea8fad06-b60e-42bd-b75f-49846f0d576d"
       }
     },
     "ios": {
-      "bundleIdentifier": "com.anku24.mymapapp",
+      "bundleIdentifier": "com.yadav4511.mymapapp",
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Allow Team 75 to use your location to show your position on the map.",
@@ -23,7 +23,7 @@
       }
     },
     "android": {
-      "package": "com.anku24.mymapapp",
+      "package": "com.yadav4511.mymapapp",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#ffffff"

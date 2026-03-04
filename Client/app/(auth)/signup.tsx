@@ -130,7 +130,7 @@ export default function Signup() {
                         style={[styles.roleTab, role === 'worker_manager' && styles.activeTab]}
                         onPress={() => setRole('worker_manager')}
                     >
-                        <Text style={[styles.tabText, role === 'worker_manager' && styles.activeTabText]}>Worker</Text>
+                        <Text style={[styles.tabText, role === 'worker_manager' && styles.activeTabText]}>Employee</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={[styles.roleTab, role === 'admin' && styles.activeTab]}
