@@ -443,6 +443,8 @@ app.post('/api/notes', async (req, res) => {
             contactPersonName, 
             contactPersonNumber, 
             studentCount,
+            subjectsTaught, // <--- Added
+            remarks,        // <--- Added
             classCount,
             latitude, 
             longitude 
@@ -459,6 +461,8 @@ app.post('/api/notes', async (req, res) => {
             contactPersonNumber, 
             studentCount,
             classCount,
+            subjectsTaught, // <--- Added
+            remarks,        // <--- Added
             latitude, 
             longitude 
         });
@@ -587,49 +591,97 @@ app.get('/api/admin/all-workers', async (req, res) => {
     }
 });
 
-app.get('api/export-monthly-notes', async (req, res) => {
-  try {
-    const { month, year } = req.query; // e.g. month=2, year=2026
-    
-    // Create a regex to match the date format "D/M/YYYY" or "DD/M/YYYY"
-    // Since your DB stores dates as strings like "19/2/2026"
-    const datePattern = new RegExp(`\\/${month}\\/${year}$`);
+// ─── DATE RANGE REPORT EXPORT ────────────────────────────────────────────────
+// GET /api/export-range-report?startDate=1/2/2026&endDate=28/2/2026&userId=xxx
+//
+// Accepts D/M/YYYY formatted dates (matching how your DB stores them).
+// Returns an .xlsx file with all notes from shifts in that range.
+// ─────────────────────────────────────────────────────────────────────────────
 
-    const shifts = await Shift.find({ date: { $regex: datePattern } }).lean();
+// ─── DATE RANGE REPORT EXPORT ────────────────────────────────────────────────
+// GET /api/export-range-report?startDate=4/3/2026&endDate=4/3/2026&userId=xxx
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── ✅ EXPORT RANGE REPORT (Excel) ──────────────────────────────────────────
+app.get('/api/export-range-report', async (req, res) => {
+  try {
+    const { startDate, endDate, userId } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'startDate and endDate are required.' });
+    }
+
+    const parseDate = (str) => {
+      const parts = String(str).trim().split('/');
+      if (parts.length !== 3) return null;
+      const [d, m, y] = parts.map(Number);
+      return new Date(y, m - 1, d);
+    };
+
+    const start = parseDate(startDate);
+    const end   = parseDate(endDate);
+
+    if (!start || isNaN(start) || !end || isNaN(end)) {
+      return res.status(400).json({ error: `Invalid format. Use D/M/YYYY.` });
+    }
+    end.setHours(23, 59, 59, 999);
+
+    // Fetch and populate notes to get new fields
+    let allShifts = await Shift.find(userId ? { userId } : {}).populate('notes').lean();
+
+    const filtered = allShifts.filter((shift) => {
+      const d = parseDate(shift.date);
+      return d && d >= start && d <= end;
+    });
+
+    if (filtered.length === 0) return res.status(404).json({ error: "No shifts found." });
 
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Monthly Report');
+    const worksheet = workbook.addWorksheet('Range Report');
 
+    // Added columns for Subjects and Remarks
     worksheet.columns = [
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Start Time', key: 'startTime', width: 12 },
-      { header: 'Logout Time', key: 'logoutTime', width: 12 },
-      { header: 'Class Name', key: 'className', width: 20 },
-      { header: 'Director', key: 'director', width: 15 },
-      { header: 'Address', key: 'address', width: 35 },
-      { header: 'Contact', key: 'contact', width: 15 }
+      { header: 'Date',            key: 'date',         width: 12 },
+      { header: 'Worker',          key: 'workerName',   width: 18 },
+      { header: 'Class Name',      key: 'className',    width: 20 },
+      { header: 'Subjects Taught', key: 'subjects',     width: 20 }, // New Column
+      { header: 'Director',        key: 'director',     width: 18 },
+      { header: 'Address',         key: 'address',      width: 30 },
+      { header: 'Contact',         key: 'contact',      width: 15 },
+      { header: 'Remarks',         key: 'remarks',      width: 40 }, // New Column
     ];
 
-    shifts.forEach(shift => {
-      // If notes exist in this shift, add a row for each note
+    worksheet.getRow(1).eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF007AFF' } };
+    });
+
+    let rowIndex = 2;
+    filtered.forEach((shift) => {
+      const baseRow = {
+        date: shift.date,
+        workerName: shift.workerName || shift.userName || '—',
+      };
+
       if (shift.notes && shift.notes.length > 0) {
-        shift.notes.forEach(note => {
+        shift.notes.forEach((note) => {
           worksheet.addRow({
-            date: shift.date,
-            startTime: shift.startTime,
-            logoutTime: shift.logoutTime,
-            className: note.className,
-            director: note.directorName,
-            address: note.address,
-            contact: note.directorNumber
+            ...baseRow,
+            className: note.className || '—',
+            subjects:  note.subjectsTaught || '—',
+            director:  note.directorName || '—',
+            address:   note.address || '—',
+            contact:   note.directorNumber || '—',
+            // Join the remarks array into a single string for Excel
+            remarks:   Array.isArray(note.remarks) ? note.remarks.filter(r => r).join(", ") : (note.remarks || '—'),
           });
+          rowIndex++;
         });
       }
     });
 
+    const fileName = `Report_${startDate.replace(/\//g, '-')}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=Report_${month}_${year}.xlsx`);
-
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     await workbook.xlsx.write(res);
     res.status(200).end();
   } catch (error) {
@@ -637,59 +689,42 @@ app.get('api/export-monthly-notes', async (req, res) => {
   }
 });
 
+// ── ✅ DOWNLOAD SINGLE SHIFT REPORT (CSV) ───────────────────────────────────
 app.get('/api/download-shift-report/:shiftId', async (req, res) => {
     try {
         const { shiftId } = req.params;
-        
-        // Populate 'notes' to get the details from the Note collection
         const shift = await Shift.findById(shiftId).populate('notes');
 
-        if (!shift) {
-            return res.status(404).json({ message: "Shift not found" });
-        }
+        if (!shift) return res.status(404).json({ message: "Shift not found" });
 
-        const reportData = shift.notes.length > 0 ? shift.notes.map(note => ({
+        const reportData = shift.notes.map(note => ({
             'Date': shift.date,
-            'Shift Login': shift.startTime ? new Date(shift.startTime).toLocaleTimeString() : 'N/A',
-            'Shift Logout': shift.logoutTime,
             'Class Name': note.className,
+            'Subjects Taught': note.subjectsTaught || 'N/A', // Added
             'Director': note.directorName,
             'Phone': note.directorNumber,
             'Address': note.address,
             'Student Count': note.studentCount,
             'Class Count': note.classCount,
-            'Latitude': note.latitude,
-            'Longitude': note.longitude,
+            'Remarks': Array.isArray(note.remarks) ? note.remarks.filter(r => r).join(" | ") : note.remarks, // Added
             'Created At': new Date(note.createdAt).toLocaleString()
-        })) : [{
-            'Date': shift.date,
-            'Shift Login': shift.startTime ? new Date(shift.startTime).toLocaleTimeString() : 'N/A',
-            'Shift Logout': shift.logoutTime,
-            'Notes': 'No notes recorded for this shift'
-        }];
+        }));
 
         const fields = [
-            'Date', 'Shift Login', 'Shift Logout', 'Class Name', 
-            'Director', 'Phone', 'Address', 'Student Count', 
-            'Class Count', 'Latitude', 'Longitude', 'Created At'
+            'Date', 'Class Name', 'Subjects Taught', 'Director', 
+            'Phone', 'Address', 'Student Count', 'Class Count', 'Remarks', 'Created At'
         ];
         
         const json2csvParser = new Parser({ fields });
         const csv = json2csvParser.parse(reportData);
-
-        const fileName = `Report_${shift.date.replace(/\//g, '-')}.csv`;
-        
-        res.header('Content-Type', 'text/csv');
-        res.attachment(fileName);
-        return res.send(csv);
-
+        res.attachment(`Shift_${shift.date.replace(/\//g, '-')}.csv`);
+        return res.status(200).send(csv);
     } catch (error) {
-        console.error("Export Error:", error);
-        res.status(500).json({ message: "Internal Server Error" });
+        res.status(500).json({ message: error.message });
     }
 });
 
-// ✅ UPDATE a note (Admin Edit)
+// ── ✅ UPDATE A NOTE (Admin Edit) ──────────────────────────────────────────
 app.put('/api/notes/:noteId', async (req, res) => {
     try {
         const { noteId } = req.params;
@@ -701,16 +736,13 @@ app.put('/api/notes/:noteId', async (req, res) => {
             contactPersonName,
             contactPersonNumber,
             studentCount,
-            classCount
+            classCount,
+            subjectsTaught, // Added
+            remarks         // Added (Expects Array)
         } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(noteId)) {
             return res.status(400).json({ message: "Invalid note ID" });
-        }
-
-        // Prevent saving empty className
-        if (!className || className.trim() === '') {
-            return res.status(400).json({ message: "Class name cannot be empty" });
         }
 
         const updatedNote = await Note.findByIdAndUpdate(
@@ -723,24 +755,24 @@ app.put('/api/notes/:noteId', async (req, res) => {
                 contactPersonName,
                 contactPersonNumber,
                 studentCount,
-                classCount
+                classCount,
+                subjectsTaught,
+                remarks
             },
             { new: true }
         );
 
         if (!updatedNote) return res.status(404).json({ message: "Note not found" });
-
         res.status(200).json({ message: "Note updated successfully", note: updatedNote });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }
 });
 
-// ✅ DELETE a note (Admin Delete)
+// ── ✅ DELETE A NOTE (Admin Delete) ──────────────────────────────────────────
 app.delete('/api/notes/:noteId', async (req, res) => {
     try {
         const { noteId } = req.params;
-
         if (!mongoose.Types.ObjectId.isValid(noteId)) {
             return res.status(400).json({ message: "Invalid note ID" });
         }
@@ -748,7 +780,6 @@ app.delete('/api/notes/:noteId', async (req, res) => {
         const deletedNote = await Note.findByIdAndDelete(noteId);
         if (!deletedNote) return res.status(404).json({ message: "Note not found" });
 
-        // Also remove the reference from any shift that has this note
         await Shift.updateMany(
             { notes: noteId },
             { $pull: { notes: new mongoose.Types.ObjectId(noteId) } }
@@ -759,5 +790,6 @@ app.delete('/api/notes/:noteId', async (req, res) => {
         res.status(500).json({ message: err.message });
     }
 });
+
 const PORT = 5000;
 app.listen(PORT, "0.0.0.0", () => console.log(`🚀 Server on port ${PORT}`));

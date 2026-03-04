@@ -35,7 +35,6 @@
 
 // module.exports = mongoose.model('Note', NoteSchema);
 
-
 const mongoose = require('mongoose');
 
 const NoteSchema = new mongoose.Schema({
@@ -54,8 +53,10 @@ const NoteSchema = new mongoose.Schema({
   classCount: { type: Number, default: 0 },
   latitude: { type: Number, required: true },
   longitude: { type: Number, required: true },
+  subjectsTaught: String,
+  // CHANGE THIS LINE:
+  remarks: [String], // <--- This allows the array of 5 notes
   createdAt: { type: Date, default: Date.now }
 });
 
 module.exports = mongoose.model('Note', NoteSchema);
-

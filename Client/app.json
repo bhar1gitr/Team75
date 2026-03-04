@@ -49,7 +49,8 @@
         {
           "locationAlwaysPermission": "Allow My Map App to track your shift path in the background."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ]
   }
 }
